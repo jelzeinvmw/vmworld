@@ -1,0 +1,447 @@
+#note that this blueprint takes advantage of both RDS and EC2 services
+#it is recommended that you either configure your AWS infrastructure so both
+#services will land in the same VPC, or configure VPC Peering between the two
+#that will be used
+inputs:
+  sshkey:
+    type: string
+    encrypted: true
+    title: Root Public SSH Key
+    description: Enter your public key to be used for key auth to web server
+  webtiersize:
+    type: string
+    enum:
+      - small
+      - medium
+      - large
+    default: small
+    title: Web Tier Size
+    description: Choose a size for your web tier
+  webtierimage:
+    type: string
+    enum:
+      - ubuntu
+      - centos
+    default: ubuntu
+    title: Web Tier Image
+    description: Choose an image for your web tier
+  clusternodecount:
+    type: integer
+    default: 1
+    title: RDS Cluster Nodes
+    description: Number of Nodes for RDS Cluster
+  rdsinstanceclass:
+    type: string
+    default: db.t2.small
+    title: RDS Instance Class
+    description: Enter the desired RDS Instance Class
+  dbname:
+    type: string
+    default: wordpress_blog
+    title: Database Name
+    description: Enter Database Name
+  dbusername:
+    type: string
+    default: root
+    title: Database Username
+    description: Enter DB Username
+  dbpassword:
+    type: string
+    encrypted: true
+    title: Database Password
+    description: Enter Datbase Password
+  finalsnapshot:
+    type: string
+    enum:
+      - 'true'
+      - 'false'
+    default: 'true'
+    title: Skip Final RDS Snapshot
+    description: Set to true to skip final snapshot
+  clusterprefix:
+    type: string
+    default: cluster
+    title: Cluster Name Prefix
+    description: RDS Cluster Name Prefix
+  instanceprefix:
+    type: string
+    default: instance
+    title: Instance Name Prefix
+    description: RDS Instance Name Prefix
+resources:
+  IAM-Role:
+    type: Cloud.Service.AWS.IAM.Role
+    metadata:
+      layoutPosition:
+        - 0
+        - 1
+    properties:
+      assume_role_policy: |
+        {
+          "Version": "2008-10-17",
+          "Statement": [
+            {
+              "Sid": "",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "elasticmapreduce.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+      provider: FP-AWS
+      provider_region: us-west-1
+      name: '${input.cluster_name}-iam-role'
+  IAM-Role-Policy:
+    type: Cloud.Service.AWS.IAM.Role.Policy
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties:
+      name: iam_emr_service_policy
+      policy: |
+        {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Resource": "*",
+                "Action": [
+                    "ec2:AuthorizeSecurityGroupEgress",
+                    "ec2:AuthorizeSecurityGroupIngress",
+                    "ec2:CancelSpotInstanceRequests",
+                    "ec2:CreateNetworkInterface",
+                    "ec2:CreateSecurityGroup",
+                    "ec2:CreateTags",
+                    "ec2:DeleteNetworkInterface",
+                    "ec2:DeleteSecurityGroup",
+                    "ec2:DeleteTags",
+                    "ec2:DescribeAvailabilityZones",
+                    "ec2:DescribeAccountAttributes",
+                    "ec2:DescribeDhcpOptions",
+                    "ec2:DescribeInstanceStatus",
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeKeyPairs",
+                    "ec2:DescribeNetworkAcls",
+                    "ec2:DescribeNetworkInterfaces",
+                    "ec2:DescribePrefixLists",
+                    "ec2:DescribeRouteTables",
+                    "ec2:DescribeSecurityGroups",
+                    "ec2:DescribeSpotInstanceRequests",
+                    "ec2:DescribeSpotPriceHistory",
+                    "ec2:DescribeSubnets",
+                    "ec2:DescribeVpcAttribute",
+                    "ec2:DescribeVpcEndpoints",
+                    "ec2:DescribeVpcEndpointServices",
+                    "ec2:DescribeVpcs",
+                    "ec2:DetachNetworkInterface",
+                    "ec2:ModifyImageAttribute",
+                    "ec2:ModifyInstanceAttribute",
+                    "ec2:RequestSpotInstances",
+                    "ec2:RevokeSecurityGroupEgress",
+                    "ec2:RunInstances",
+                    "ec2:TerminateInstances",
+                    "ec2:DeleteVolume",
+                    "ec2:DescribeVolumeStatus",
+                    "ec2:DescribeVolumes",
+                    "ec2:DetachVolume",
+                    "iam:GetRole",
+                    "iam:GetRolePolicy",
+                    "iam:ListInstanceProfiles",
+                    "iam:ListRolePolicies",
+                    "iam:PassRole",
+                    "s3:CreateBucket",
+                    "s3:Get*",
+                    "s3:List*",
+                    "sdb:BatchPutAttributes",
+                    "sdb:Select",
+                    "sqs:CreateQueue",
+                    "sqs:Delete*",
+                    "sqs:GetQueue*",
+                    "sqs:PurgeQueue",
+                    "sqs:ReceiveMessage"
+                ]
+            }]
+        }
+      role: '${IAM-Role.id}'
+      provider: FP-AWS
+      provider_region: us-west-1
+  IAM-InstanceProfile-Role-Policy:
+    type: Cloud.Service.AWS.IAM.Role.Policy
+    metadata:
+      layoutPosition:
+        - 2
+        - 0
+    properties:
+      name: iam_emr_profile_policy
+      policy: |
+        {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Resource": "*",
+                "Action": [
+                    "cloudwatch:*",
+                    "dynamodb:*",
+                    "ec2:Describe*",
+                    "elasticmapreduce:Describe*",
+                    "elasticmapreduce:ListBootstrapActions",
+                    "elasticmapreduce:ListClusters",
+                    "elasticmapreduce:ListInstanceGroups",
+                    "elasticmapreduce:ListInstances",
+                    "elasticmapreduce:ListSteps",
+                    "kinesis:CreateStream",
+                    "kinesis:DeleteStream",
+                    "kinesis:DescribeStream",
+                    "kinesis:GetRecords",
+                    "kinesis:GetShardIterator",
+                    "kinesis:MergeShards",
+                    "kinesis:PutRecord",
+                    "kinesis:SplitShard",
+                    "rds:Describe*",
+                    "s3:*",
+                    "sdb:*",
+                    "sns:*",
+                    "sqs:*"
+                ]
+            }]
+        }
+      role: '${IAM-InstanceProfile-Role.id}'
+      provider: FP-AWS
+      provider_region: us-west-1
+  IAM-InstanceProfile-Role:
+    type: Cloud.Service.AWS.IAM.Role
+    metadata:
+      layoutPosition:
+        - 2
+        - 1
+    properties:
+      assume_role_policy: |
+        {
+          "Version": "2008-10-17",
+          "Statement": [
+            {
+              "Sid": "",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+      name: '${input.cluster_name}-instance-profile-role'
+      provider: FP-AWS
+      provider_region: us-west-1
+  RDS-cluster:
+    type: Cloud.Service.AWS.RDS.Cluster
+    metadata:
+      layoutPosition:
+        - 2
+        - 2
+    properties:
+      provider: AWS B30
+      #note that the provider should be the exact string name of the Cloud Account
+      #where you want to run the Cluster
+      provider_region: us-east-1
+      #note that the provider region should be the exact string name of region within 
+      #the Cloud Account where you want to run the Cluster
+      database_name: '${input.dbname}'
+      master_username: '${input.dbusername}'
+      master_password: '${input.dbpassword}'
+      skip_final_snapshot: '${input.finalsnapshot}'
+      cluster_identifier_prefix: '${input.clusterprefix}'
+  Instance-Profile:
+    type: Cloud.Service.AWS.IAM.Instance.Profile
+    metadata:
+      layoutPosition:
+        - 2
+        - 3
+    properties:
+      name: '${input.cluster_name}-instance-profile'
+      roles:
+        - '${IAM-InstanceProfile-Role.name}'
+      provider: FP-AWS
+      provider_region: us-west-1
+  EMR-Cluster:
+    type: Cloud.Service.AWS.EMR.Cluster
+    dependsOn:
+      - RDS-instance
+    metadata:
+      layoutPosition:
+        - 2
+        - 4
+    properties:
+      applications:
+        - Spark
+      bootstrap_action:
+        - args:
+            - instance.isMaster=true
+            - echo running on master node
+          name: runif
+          path: 's3://us-east-2.elasticmapreduce/bootstrap-actions/run-if'
+      configurations: test-fixtures/emr_configurations.json
+      core_instance_count: '${input.corenode_count}'
+      core_instance_type: '${input.coreinstance_type}'
+      ec2_attributes:
+        - instance_profile: '${Instance-Profile.arn}'
+      master_instance_type: '${input.masterinstance_type}'
+      name: '${input.cluster_name}'
+      release_label: '${input.release_number}'
+      service_role: '${IAM-Role.arn}'
+      provider: FP-AWS
+      provider_region: us-west-1
+      constraints:
+        - tags:
+            dns_zone: env_zone
+            env: env
+            name: name-env
+            role: rolename
+  RDS-instance:
+    type: Cloud.Service.AWS.RDS.Cluster.Instance
+    metadata:
+      layoutPosition:
+        - 2
+        - 5
+    properties:
+      provider: AWS B30
+      #note that the provider should be the exact string name of the Cloud Account
+      #where you want to run the Instance
+      provider_region: us-east-1
+      #note that the provider region should be the exact string name of region within 
+      #the Cloud Account where you want to run the Instance
+      count: '${input.clusternodecount}'
+      cluster_identifier: '${RDS-cluster.id}'
+      instance_class: '${input.rdsinstanceclass}'
+      identifier_prefix: '${input.instanceprefix}'
+  fp-isonet:
+    type: Cloud.Network
+    metadata:
+      layoutPosition:
+        - 3
+        - 0
+    properties:
+      name: Default-AWS
+      networkType: existing
+  webTrConsole:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - apacheGeode
+      - rabbitMQ
+    metadata:
+      layoutPosition:
+        - 2
+        - 6
+    properties:
+      cpuCount: 4
+      count: 3
+      imageRef: ''
+      totalMemoryMB: 16392
+      networks:
+        - name: '${fp-isonet.name}'
+  clusteringService:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - apacheGeode
+      - redisCache
+      - rabbitMQ
+    metadata:
+      layoutPosition:
+        - 2
+        - 7
+    properties:
+      cpuCount: 1
+      imageRef: ''
+      totalMemoryMB: 1024
+      networks:
+        - name: '${fp-isonet.name}'
+  enricherProcessor:
+    type: Cloud.vSphere.Machine
+    dependsOn:
+      - apacheGeode
+      - redisCache
+      - rabbitMQ
+    metadata:
+      layoutPosition:
+        - 2
+        - 8
+    properties:
+      cpuCount: 1
+      imageRef: ''
+      totalMemoryMB: 1024
+      networks:
+        - name: '${fp-isonet.name}'
+  rabbitMQ:
+    type: Cloud.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 9
+    properties:
+      constraints:
+        - tag: 'env:dev'
+      name: Rabbit MQ
+      image: '${input.webtierimage}'
+      flavor: '${input.webtiersize}'
+      networks:
+        - name: '${fp-isonet.name}'
+  redisCache:
+    type: Cloud.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 10
+    properties:
+      constraints:
+        - tag: 'env:dev'
+      name: Redis
+      image: '${input.webtierimage}'
+      flavor: '${input.webtiersize}'
+      networks:
+        - name: '${fp-isonet.name}'
+  apacheGeode:
+    type: Cloud.Machine
+    dependsOn:
+      - RDS-instance
+    metadata:
+      layoutPosition:
+        - 2
+        - 11
+    properties:
+      constraints:
+        - tag: 'env:dev'
+      name: Apache Geode
+      image: '${input.webtierimage}'
+      flavor: '${input.webtiersize}'
+      networks:
+        - name: '${fp-isonet.name}'
+      cloudConfig: |
+        #cloud-config
+        users:
+          - name: root
+            ssh-authorized-keys:
+              - ${input.sshkey}
+
+        repo_update: true
+        repo_upgrade: all
+
+        packages:
+         - apache2
+         - php
+         - php-mysql
+         - libapache2-mod-php
+         - php-mcrypt
+         - mysql-client
+
+        runcmd:
+         - sudo sed -e 's/.*PermitRootLogin no.*/PermitRootLogin yes/' -i /etc/ssh/sshd_config
+         - sudo sed -e 's/.*PermitRootLogin prohibit-password.*/PermitRootLogin yes/' -i /etc/ssh/sshd_config
+         - sudo service sshd restart
+         - mkdir -p /var/www/html/mywordpresssite && cd /var/www/html && wget https://wordpress.org/latest.tar.gz && tar -xzf /var/www/html/latest.tar.gz -C /var/www/html/mywordpresssite --strip-components 1
+         - i=0; while [ $i -le 5 ]; do mysql --connect-timeout=3 -h ${RDS-cluster.endpoint} -u ${input.dbusername} -p${input.dbpassword} -e "SHOW STATUS;" && break || sleep 15; i=$((i+1)); done
+         - mysql -u ${input.dbusername} -p${input.dbpassword} -h ${RDS-cluster.endpoint} -e "create database ${input.dbname};"
+         - mv /var/www/html/mywordpresssite/wp-config-sample.php /var/www/html/mywordpresssite/wp-config.php
+         - sed -i -e s/"define('DB_NAME', 'database_name_here');"/"define('DB_NAME', '${input.dbname}');"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define('DB_USER', 'username_here');"/"define('DB_USER', '${input.dbusername}');"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define('DB_PASSWORD', 'password_here');"/"define('DB_PASSWORD', '${input.dbpassword}');"/ /var/www/html/mywordpresssite/wp-config.php && sed -i -e s/"define('DB_HOST', 'localhost');"/"define('DB_HOST', '${RDS-cluster.endpoint}');"/ /var/www/html/mywordpresssite/wp-config.php
+         - service apache2 reload
+        identifier_prefix: '${input.instanceprefix}'

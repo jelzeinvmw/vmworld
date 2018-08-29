@@ -1,0 +1,36 @@
+inputs: {}
+resources:
+  Cava-Tango-Cassandra:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 0
+        - 0
+    properties:
+      imageRef: >-
+        http://10.153.176.253/OVFs/bitnami-cassandra-3.11.2-5-noedit/bitnami-cassandra-3.11.2-5-r08-linux-centos-7-x86_64.ovf
+      cpuCount: 1
+      totalMemoryMB: 4096
+      provisioningType: thin
+  Cloud_Puppet_1:
+    type: Cloud.Puppet
+    dependsOn:
+      - Cava-Tango-Cassandra
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties:
+      host: ''
+      role: ''
+      osType: linux
+      provider: ''
+      username: ''
+      environment: ''
+      maxConnectionRetries: 10
+      useSudo: false
+      password: ''
+      disableHTTPS: false
+      autoSignSecret: ''
+      agentConfiguration: {}
+      count: 0

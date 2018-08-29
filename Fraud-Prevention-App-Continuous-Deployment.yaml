@@ -1,0 +1,318 @@
+---
+project: Fraud Prevention
+kind: PIPELINE
+name: Fraud-Prevention-App-Continuous-Deployment
+enabled: true
+description: Canary deployment for the fraud detection application
+tags: [
+  SmartTemplate,
+  CICD,
+  Canary,
+  2PhaseCanaryDeployment,
+  AutoRollback,
+  GithubTriggered]
+concurrency: 20
+options: [
+  GIT_TRIGGER]
+input:
+  GIT_SERVER_URL: ''
+  GIT_BRANCH_NAME: ''
+  GIT_COMMIT_ID: ''
+  GIT_EVENT_TIMESTAMP: ''
+  GIT_EVENT_DESCRIPTION: ''
+  GIT_REPO_NAME: ''
+  GIT_EVENT_OWNER_NAME: ''
+  GIT_CHANGE_SUBJECT: ''
+ciWorkspace:
+  image: automationbeta/cs-builder:latest
+  cache:
+  - ''
+  endpoint: Fraud-Prevention-Build-Docker-Host
+stageOrder:
+- Build-and-package
+- Deployment-to-dev
+- Canary-deployment-to-prod
+stages:
+  Deployment-to-dev:
+    description: ''
+    taskOrder:
+    - CloudAssembly-Deploy-to-dev
+    - Update-load-balancer
+    - Verify-Deployment
+    tasks:
+      Update-load-balancer:
+        type: REST
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          action: get
+          url: http://my-elb
+      Verify-Deployment:
+        type: POLL
+        ignoreFailure: true
+        preCondition: ''
+        input:
+          ignoreFailure: true
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          exitCriteria: {
+            failure: status == 'FAILED' || status == 'UNSTABLE',
+            success: status == 'COMPLETED'
+          }
+          pollCount: 120
+          pollIntervalSeconds: '5'
+          url: http://elb
+      CloudAssembly-Deploy-to-dev:
+        type: Blueprint
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          blueprint: Fraud Detection Application
+          action: CreateDeployment
+          deploymentName: ''
+          parameters: {
+            }
+  Canary-deployment-to-prod:
+    description: ''
+    taskOrder:
+    - Deploy-canary
+    - Verify-Canary
+    - Canary-phase1-divert-traffic
+    - Release-gate-move-to-prod
+    - Scale-out-deployment
+    - Verify-Canary-phase 2
+    - Canary-divert-all-traffic
+    - Remove-previous-prod-cluster
+    tasks:
+      Scale-out-deployment:
+        type: Blueprint
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          blueprint: Fraud Detection Application
+          _deploymentFlag: false
+          action: UpdateDeployment
+          allowDestroy: false
+          deploymentName: ${Canary-deployment-to-prod.Deploy-canary.output.deploymentName}
+          parameters: {
+            }
+      Deploy-canary:
+        type: Blueprint
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          blueprint: Fraud Detection Application
+          action: CreateDeployment
+          deploymentName: ''
+          parameters: {
+            }
+      Canary-phase1-divert-traffic:
+        type: REST
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          action: get
+          url: http://my-elb?update=${Canary-deployment-to-prod.Deploy-canary.output.deploymentId}
+      Verify-Canary:
+        type: POLL
+        ignoreFailure: true
+        preCondition: ''
+        input:
+          ignoreFailure: true
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          exitCriteria: {
+            failure: status == 'FAILED' || status == 'UNSTABLE',
+            success: status == 'COMPLETED'
+          }
+          pollCount: 120
+          pollIntervalSeconds: '5'
+          url: http://my-elb
+      Remove-previous-prod-cluster:
+        type: Blueprint
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          _deploymentFlag: true
+          action: DeleteDeployment
+          deploymentName: Fraud Prevention App
+      Verify-Canary-phase 2:
+        type: POLL
+        ignoreFailure: true
+        preCondition: ''
+        input:
+          ignoreFailure: true
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          exitCriteria: {
+            failure: status == 'FAILED' || status == 'UNSTABLE',
+            success: status == 'COMPLETED'
+          }
+          pollCount: 120
+          pollIntervalSeconds: '5'
+          url: http://my-elb
+      Release-gate-move-to-prod:
+        type: UserOperation
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          summary: Move to production (100%)
+          pipelineName: ${name}
+          approvers: [
+            sbadem@vmware.com]
+          description: Please approve Fraud detection app - move to production
+          sendemail: false
+      Canary-divert-all-traffic:
+        type: REST
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          headers: {
+            Accept: application/json,
+            Content-Type: application/json
+          }
+          action: get
+          url: http://my-elb
+  Build-and-package:
+    taskOrder:
+    - Run-Unit-Tests
+    - Build-Application
+    - Run-Integration-Tests
+    - Package and store artifacts
+    tasks:
+      Run-Integration-Tests:
+        type: CI
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          process: [
+            {
+              path: /demo-project,
+              type: junit,
+              label: Junit
+            },
+            {
+              path: /demo-project,
+              type: jacoco,
+              label: Jacoco
+            },
+            {
+              path: /demo-project,
+              type: checkstyle,
+              label: Checkstyle
+            },
+            {
+              path: /demo-project,
+              type: findbugs,
+              label: Findbugs
+            }]
+          steps: [
+            cd demo-project,
+            mvn test]
+          export: [
+            '']
+          artifacts: [
+            '']
+          
+      Package and store artifacts:
+        type: CI
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          process: [
+            ]
+          steps: [
+            cd demo-project,
+            COMMIT=`git rev-parse HEAD`,
+            'export IMAGE=automationbeta/demo-cicd:$COMMIT',
+            'export DOCKER_HOST=tcp://18.211.211.27:4243',
+            docker login --username=automationbeta --password=VMware@123,
+            docker build -t $IMAGE --file ./docker/Dockerfile .,
+            docker push $IMAGE]
+          export: [
+            '']
+          artifacts: [
+            '']
+          
+      Build-Application:
+        type: CI
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          process: [
+            {
+              path: /demo-project,
+              type: junit,
+              label: Junit
+            },
+            {
+              path: /demo-project,
+              type: jacoco,
+              label: Jacoco
+            },
+            {
+              path: /demo-project,
+              type: checkstyle,
+              label: Checkstyle
+            },
+            {
+              path: /demo-project,
+              type: findbugs,
+              label: Findbugs
+            }]
+          steps: [
+            cd demo-project,
+            mvn clean install -DskipTests]
+          export: [
+            '']
+          artifacts: [
+            '']
+          
+      Run-Unit-Tests:
+        type: CI
+        ignoreFailure: false
+        preCondition: ''
+        input:
+          process: [
+            {
+              path: /demo-project,
+              type: junit,
+              label: Junit
+            },
+            {
+              path: /demo-project,
+              type: jacoco,
+              label: Jacoco
+            },
+            {
+              path: /demo-project,
+              type: checkstyle,
+              label: Checkstyle
+            },
+            {
+              path: /demo-project,
+              type: findbugs,
+              label: Findbugs
+            }]
+          steps: [
+            cd demo-project,
+            mvn test]
+          export: [
+            '']
+          artifacts: [
+            '']
+          
